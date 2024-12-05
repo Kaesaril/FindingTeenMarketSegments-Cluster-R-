@@ -1,0 +1,181 @@
+---
+title: "Cluster"
+author: "César Nieto González"
+date: "2023-11-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Clustering with k-means -------------------
+
+Clustering in machine learning organizes data into similar groups without predefined criteria, making it valuable for knowledge discovery. The key principle is grouping items that are very similar to each other but different from those outside the cluster. Clusters, defined by varying notions of similarity, enable actions like targeted marketing, anomaly detection, and simplifying large datasets. Clustering is effective when diverse data can be represented by a smaller number of meaningful groups, offering insights into relationships and reducing complexity.
+
+## Example: Finding Teen Market Segments ----
+
+Teenagers engaging on social networking services like Facebook, Tumblr, and Instagram have become a sought-after demographic for businesses due to their substantial disposable income. Marketers, aiming to target this vast teenage consumer base, seek an edge in the competitive market by identifying segments with shared tastes. Clustering analysis, applied to the text on teenagers' social media pages, can automate the discovery of natural segments based on common interests like sports, religion, or music. However, the evaluation of the clusters' significance and their application in advertising strategies remains a manual task. The process involves identifying distinct segments and determining how these clusters can be effectively utilized for targeted advertising.
+
+
+## Step 2: Exploring and preparing the data ----
+For this analysis, we will be using a dataset representing a random sample of 30,000 US high school students who had profiles on a well-known SNS in 2006. 
+
+From the top 500 words appearing across all pages, 36 words were chosen to represent five categories of interests: extracurricular activities, fashion, religion, romance, and antisocial behavior. The 36 words include terms such as football, sexy, kissed, bible, shopping, death, and drugs.
+
+```{r}
+teens <- read.csv("snsdata.csv", stringsAsFactors = TRUE)
+str(teens)
+
+```
+Let's also take a quick look at the specifics of the data. The first several lines of the str() output are as follows:
+# look at missing data for female variable
+Do you notice anything strange around the gender row? If you were looking carefully, you may have noticed the NA value, which is out of place compared to the 1 and 2 values. The NA is R's way of telling us that the record has a missing value—we do not know the person's gender. Until now, we haven't dealt with missing data, but it can be a significant problem for many types of analyses.
+
+Let's see how substantial this problem is. One option is to use the table() command, as follows:
+To include the NA values (if there are any), we simply need to add an additional parameter:
+```{r}
+table(teens$gender)
+table(teens$gender, useNA = "ifany")
+```
+# look at missing data for age variable
+If you examine the other variables in the data frame, you will find that besides gender, only age has missing values.
+```{r}
+summary(teens$age)
+```
+# eliminate age outliers
+To recode the age variable, we can use the ifelse() function, assigning teen$age the value of teen$age if the age is at least 13 and less than 20 years; otherwise, it will receive the value NA:
+```{r}
+teens$age <- ifelse(teens$age >= 13 & teens$age < 20,
+                     teens$age, NA)
+
+summary(teens$age)
+```
+# reassign missing gender values to "unknown"
+For instance, if someone is not female and not unknown gender, they must be male. Therefore, in this case, we need to only create dummy variables for female and unknown gender:
+```{r}
+teens$female <- ifelse(teens$gender == "F" &
+                         !is.na(teens$gender), 1, 0)
+teens$no_gender <- ifelse(is.na(teens$gender), 1, 0)
+```
+# check our recoding work
+
+As you might expect, the is.na() function tests whether the gender is equal to NA. Therefore, the first statement assigns teens$female the value 1 if the gender is equal to F and the gender is not equal to NA, otherwise it assigns the value 0. In the second statement, if is.na() returns TRUE, meaning the gender is missing, then the teens$no_gender variable is assigned 1, otherwise it is assigned the value 0. To confirm that we did the work correctly, let's compare our constructed dummy variables to the original gender variable:
+
+```{r}
+table(teens$gender, useNA = "ifany")
+table(teens$female, useNA = "ifany")
+table(teens$no_gender, useNA = "ifany")
+```
+The number of 1 values for teens$female and teens$no_gender matches the number of F and NA values respectively, so we should be able to trust our work.
+# finding the mean age by cohort
+
+mean(teens$age) # doesn't work
+If we try to apply the mean() function as we have done for previous analyses, there's a problem
+
+The issue is that the mean value is undefined for a vector containing missing data. As our age data contains missing values, mean(teens$age) returns a missing value. We can correct this by adding an additional parameter to remove the missing values before calculating the mean:
+
+```{r}
+mean(teens$age, na.rm = TRUE) # works
+```
+# age by cohort
+This reveals that the average student in our data is about 17 years old. This only gets us part of the way there; we actually need the average age for each graduation year. You might first attempt to calculate the mean four times, but one of the benefits of R is that there's usually a way to avoid repeating oneself. In this case, the aggregate() function is the tool for the job. It computes statistics for subgroups of data. Here, it calculates the mean age by graduation year after removing the NA values:
+```{r}
+aggregate(data = teens, age ~ gradyear, mean, na.rm = TRUE)
+```
+# create a vector with the average age for each gradyear, repeated by person
+
+The aggregate() output is in a data frame. This would require extra work to merge back onto our original data. As an alternative, we can use the ave() function, which returns a vector with the group means repeated such that the result is equal in length to the original vector
+
+```{r}
+ave_age <- ave(teens$age, teens$gradyear,
+                 FUN = function(x) mean(x, na.rm = TRUE))
+```
+
+To impute these means onto the missing values, we need one more ifelse() call to use the ave_age value only if the original age value was NA:
+  ```{r}
+teens$age <- ifelse(is.na(teens$age), ave_age, teens$age)
+```
+# check the summary results to ensure missing values are eliminated
+```{r}
+summary(teens$age)
+```
+## Step 3: Training a model on the data ----
+
+# create a z-score standardized data frame for easier interpretation
+
+We'll start our cluster analysis by considering only the 36 features that represent the number of times various interests appeared on the teenager SNS profiles. For convenience, let's make a data frame containing only these features:
+
+```{r}
+interests <- teens[5:40]
+```
+A common practice employed prior to any analysis using distance calculations is to normalize or z-score standardize the features such that each utilizes the same range. By doing so, you can avoid a problem in which some features come to dominate solely because they have a larger range of values than the others.
+
+To apply z-score standardization to the interests data frame, we can use the scale() function with lapply(). Since lapply() returns a matrix, it must be coerced back to data frame form using the as.data.frame() function, as follows:
+
+```{r}
+interests_z <- as.data.frame(lapply(interests, scale))
+```
+# compare the data before and after the transformation
+```{r}
+summary(interests$basketball)
+summary(interests_z$basketball)
+```
+As expected, the interests_z dataset transformed the basketball feature to have a mean of zero and a range that spans above and below zero. Now, a value less than zero can be interpreted as a person having fewer-than-average mentions of basketball in their profile. A value greater than zero implies that the person mentioned basketball more frequently than the average.
+
+# create the clusters using k-means
+To use the k-means algorithm to divide the teenagers' interest data into five clusters, we use the kmeans() function on the interests data frame. Because the k-means algorithm utilizes random starting points, the set.seed() function is used to ensure that the results match the output in the examples that follow. 
+
+```{r}
+RNGversion("3.5.2") # use an older random number generator to match the book
+set.seed(2345)
+teen_clusters <- kmeans(interests_z, 5)
+```
+The result of the k-means clustering process is a list named teen_clusters that stores the properties of each of the five clusters
+
+## Step 4: Evaluating model performance ----
+# look at the size of the clusters
+
+One of the most basic ways to evaluate the utility of a set of clusters is to examine the number of examples falling in each of the groups. If the groups are too large or too small, then they are not likely to be very useful. To obtain the size of the kmeans() clusters, use the teen_clusters$size component as follows:
+
+```{r}
+teen_clusters$size
+```
+The analysis reveals five clusters as intended. The smallest cluster includes 600 teenagers (two percent), whereas the largest encompasses 21,514 (72 percent). While the significant disparity in cluster sizes is somewhat worrisome, a comprehensive examination of these groups is necessary to determine whether this discrepancy signifies a potential issue.
+
+# look at the cluster centers
+For a more in-depth look at the clusters, we can examine the coordinates of the cluster centroids using the teen_clusters$centers component, which is as follows for the first four interests:
+
+```{r}
+teen_clusters$centers
+```
+
+The output rows (labeled 1 to 5) represent the five clusters, with values indicating each cluster's average interest level in the listed categories. Z-score standardization means positive values are above the overall mean, while negative values are below. Examining these values reveals patterns; for instance, the third cluster has the highest average interest in basketball. By comparing clusters to the mean, we identify distinguishing patterns, typically by printing and analyzing cluster centers. The highlighted screenshot showcases distinct patterns in 19 out of 36 teenager interests across the five clusters.
+
+## Step 5: Improving model performance ----
+# apply the cluster IDs to the original data frame
+
+We'll begin by applying the clusters back onto the full dataset. The teen_clusters object created by the kmeans() function includes a component named cluster that contains the cluster assignments for all 30,000 individuals in the sample.
+
+```{r}
+teens$cluster <- teen_clusters$cluster
+```
+# look at the first five records
+```{r}
+teens[1:5, c("cluster", "gender", "age", "friends")]
+```
+# mean age by cluster
+Using the aggregate() function, we can also look at the demographic characteristics of the clusters. 
+```{r}
+aggregate(data = teens, age ~ cluster, mean)
+```
+# proportion of females by cluster
+Recall that overall about 74 percent of the SNS users are female. Cluster one, the so-called princesses, is nearly 84 percent female, while clusters two and five are only about 70 percent female. These disparities imply that there are differences in the interests that teenage boys and girls discuss on their social networking pages
+```{r}
+aggregate(data = teens, female ~ cluster, mean)
+```
+# mean number of friends by cluster
+On average, princesses have the most friends (41.4), followed by athletes (37.2) and brains (32.6). On the low end are criminals (30.5) and basket cases (27.7). As with gender, the connection between a teenager's number of friends and their predicted cluster is remarkable given that we did not use the friendship data as an input to the clustering algorithm. Also interesting is the fact that the number of friends seems to be related to the stereotype of each cluster's high school popularity: the stereotypically popular groups tend to have more friends.
+```{r}
+aggregate(data = teens, friends ~ cluster, mean)
+```
